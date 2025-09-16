@@ -180,6 +180,144 @@ function Write-Excel($rows,[string]$pathXlsx){
   $summary | Export-Excel -Path $pathXlsx -WorksheetName 'SummaryByComponent' -AutoSize -StartRow 1 -ClearSheet
 }
 
+function Out-DTReportHtml {
+  param(
+    $rows,
+    [string]$htmlPath,
+    [string]$title,
+    [object]$summaryRows
+  )
+
+  # KPIs
+  $kpiTotal = @($rows).Count
+  $kpiCrit  = @($rows | Where-Object { $_.Severity -eq 'Critical' }).Count
+  $kpiHigh  = @($rows | Where-Object { $_.Severity -eq 'High'     }).Count
+  $kpiMed   = @($rows | Where-Object { $_.Severity -eq 'Medium'   }).Count
+  $kpiLow   = @($rows | Where-Object { $_.Severity -eq 'Low'      }).Count
+  $kpiInfo  = @($rows | Where-Object { $_.Severity -eq 'Info'     }).Count
+
+$style = @'
+<style>
+  :root{
+    --bg:#121212; --ink:#eaeaea; --muted:#a9a9a9; --line:#2a2a2a; --card:#1d1d1d;
+    --sev-critical:#ef5350; --sev-high:#ff9800; --sev-medium:#ffeb3b; --sev-low:#66bb6a; --sev-info:#42a5f5; --sev-unknown:#777;
+    --thead:#1a1a1a; --row-alt:#181818; --link:#64b5f6;
+  }
+  *{box-sizing:border-box}
+  body{margin:24px;background:var(--bg);color:var(--ink);font-family:Segoe UI,Arial,Helvetica,sans-serif}
+  .wrap{max-width:1280px;margin:0 auto}
+  h1{margin:0 0 6px 0;font-weight:700;color:#fff}
+  .meta{color:var(--muted);margin:0 0 16px 0}
+  .kpi{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}
+  .kpi .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;min-width:120px}
+  .kpi .title{font-size:12px;color:var(--muted);margin-bottom:6px}
+  .kpi .val{font-size:20px;font-weight:700}
+  .section{margin-top:28px}
+  .grid{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+  table{border-collapse:separate;border-spacing:0;width:100%}
+  thead th{position:sticky;top:0;background:var(--thead);border-bottom:1px solid var(--line);font-weight:600;font-size:12px;padding:10px;text-align:left;color:#ddd}
+  tbody td{border-bottom:1px solid var(--line);padding:10px;font-size:13px;vertical-align:top;color:#eee}
+  tbody tr:nth-child(even){background:var(--row-alt)}
+  a{color:var(--link);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:600;color:#000}
+  .sev-critical{background:var(--sev-critical);color:#fff}
+  .sev-high{background:var(--sev-high)}
+  .sev-medium{background:var(--sev-medium)}
+  .sev-low{background:var(--sev-low)}
+  .sev-info{background:var(--sev-info)}
+  .sev-unknown{background:var(--sev-unknown);color:#fff}
+  .epss{display:inline-block;min-width:120px}
+  .bar{height:8px;background:#333;border-radius:6px;overflow:hidden}
+  .bar > span{display:block;height:100%;background:#7c4dff}
+  .epss small{display:inline-block;margin-top:4px;color:var(--muted)}
+</style>
+'@
+
+   $rowsHtml = ($rows | ForEach-Object {
+    $sev = [string]$_.Severity
+    $sevClass = if ([string]::IsNullOrWhiteSpace($sev)) { 'sev-unknown' } else { 'sev-' + $sev.ToLower() }
+    # PS5: não há operador ?? -> calcula label explicitamente
+    $sevLabel = if ([string]::IsNullOrWhiteSpace($sev)) { 'Unknown' } else { $sev }
+
+    $vulnCell = if ($_.VulnUrl) {
+      '<a href="' + ($_.VulnUrl) + '" target="_blank" rel="noopener">' + ($_.Vulnerability) + '</a>'
+    } else { ($_.Vulnerability) }
+
+    [double]$epssVal = 0.0
+    if ($_.EPSS -ne $null -and $_.EPSS -ne '') {
+      [double]$epssVal = $_.EPSS
+      if ($epssVal -gt 1) { $epssVal = $epssVal/100 } # aceita 0..1 ou 0..100
+    }
+    $epssPct = [math]::Round($epssVal*100,1)
+    $epssBar = '<div class="epss"><div class="bar"><span style="width:'+$epssPct+'%"></span></div><small>'+ $epssPct +'%</small></div>'
+
+    '<tr>' +
+      '<td>' + ($_.ProjectName)      + '</td>' +
+      '<td>' + ($_.Component)        + '</td>' +
+      '<td>' + ($_.ComponentVersion) + '</td>' +
+      '<td>' + $vulnCell             + '</td>' +
+      '<td>' + ($_.Source)           + '</td>' +
+      '<td><span class="badge ' + $sevClass + '">' + $sevLabel + '</span></td>' +
+      '<td>' + ($_.CVSSv3)           + '</td>' +
+      '<td>' + $epssBar              + '</td>' +
+      '<td>' + ($_.AnalysisState)    + '</td>' +
+      '<td>' + ($_.Suppressed)       + '</td>' +
+    '</tr>'
+  }) -join "`r`n"
+
+  $summaryHtml = ""
+  if ($summaryRows -and $summaryRows.Count -gt 0) {
+    $summaryHtml = ($summaryRows | ForEach-Object {
+      '<tr>' +
+        '<td>' + ($_.Componente) + '</td>' +
+        '<td>' + ($_.Total)      + '</td>' +
+        '<td><span class="badge sev-critical">' + ($_.Critical) + '</span></td>' +
+        '<td><span class="badge sev-high">'     + ($_.High)     + '</span></td>' +
+        '<td><span class="badge sev-medium">'   + ($_.Medium)   + '</span></td>' +
+        '<td><span class="badge sev-low">'      + ($_.Low)      + '</span></td>' +
+        '<td><span class="badge sev-info">'     + ($_.Info)     + '</span></td>' +
+      '</tr>'
+    }) -join "`r`n"
+  }
+
+$head = @'
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+'@
+
+  $nowStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+  $html =
+    $head + $style + '</head><body><div class="wrap">' +
+    '<h1>' + $title + '</h1>' +
+    '<p class="meta">Generated at ' + $nowStr + '</p>' +
+    '<div class="kpi">' +
+      '<div class="card"><div class="title">Total</div><div class="val">'+ $kpiTotal +'</div></div>' +
+      '<div class="card"><div class="title">Critical</div><div class="val">'+ $kpiCrit +'</div></div>' +
+      '<div class="card"><div class="title">High</div><div class="val">'+ $kpiHigh +'</div></div>' +
+      '<div class="card"><div class="title">Medium</div><div class="val">'+ $kpiMed +'</div></div>' +
+      '<div class="card"><div class="title">Low</div><div class="val">'+ $kpiLow +'</div></div>' +
+      '<div class="card"><div class="title">Info</div><div class="val">'+ $kpiInfo +'</div></div>' +
+    '</div>' +
+    '<div class="section"><h2>Findings</h2>' +
+    '<div class="grid"><table><thead><tr>' +
+      '<th>Project</th><th>Component</th><th>Version</th><th>Vulnerability</th><th>Source</th><th>Severity</th><th>CVSSv3</th><th>EPSS</th><th>Analysis</th><th>Suppressed</th>' +
+    '</tr></thead><tbody>' + $rowsHtml + '</tbody></table></div></div>'
+
+  if ($summaryRows -and $summaryRows.Count -gt 0) {
+    $html +=
+      '<div class="section"><h2>Summary by Component</h2>' +
+      '<div class="grid"><table><thead><tr>' +
+        '<th>Component</th><th>Total</th><th>Critical</th><th>High</th><th>Medium</th><th>Low</th><th>Info</th>' +
+      '</tr></thead><tbody>' + $summaryHtml + '</tbody></table></div></div>'
+  }
+
+  $html += '</div></body></html>'
+  $html | Out-File -FilePath $htmlPath -Encoding UTF8
+}
+
 function Write-PDF([string]$htmlPath,[string]$pdfPath){
   # Try wkhtmltopdf
   $wk = Get-Command wkhtmltopdf -ErrorAction SilentlyContinue
@@ -319,21 +457,9 @@ $csvPath = "$base.csv"
 $rows | Export-Csv -NoTypeInformation -Encoding UTF8 -Path $csvPath
 Write-Host ("[OK] CSV: {0} (rows: {1})" -f $csvPath, $rows.Count) -ForegroundColor Green
 
-# HTML (with fallback)
+# HTML
 $htmlPath = "$base.html"
-if (Get-Command Write-HTML -ErrorAction SilentlyContinue) {
-  Write-HTML -rows $rows -htmlPath $htmlPath -title $title -summaryRows $summary
-} else {
-  $head = @"
-<style>
-  body{font-family:Segoe UI,Arial,sans-serif;margin:24px}
-  table{border-collapse:collapse;width:100%}
-  th,td{border:1px solid #e5e5e5;padding:6px 8px;font-size:12px}
-  th{background:#fafafa;text-align:left}
-</style>
-"@
-  $rows | ConvertTo-Html -Title $title -Head $head | Out-File -Encoding utf8 $htmlPath
-}
+Out-DTReportHtml -rows $rows -htmlPath $htmlPath -title $title -summaryRows $summary
 Write-Host ("[OK] HTML: {0}" -f $htmlPath) -ForegroundColor Green
 
 # XLSX (optional)
